@@ -1,8 +1,8 @@
-name: CineRecs Daily Sync
+name: CineRecs Weekly Sync
 
 on:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 2 * * 0"
   workflow_dispatch:
 
 jobs:
@@ -21,8 +21,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r backend/requirements.txt
+          pip install huggingface_hub
 
-      - name: Run daily sync
+      - name: Run weekly sync
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -30,4 +31,22 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          UPSTASH_REDIS_URL: ${{ secrets.UPSTASH_REDIS_URL }}
+          UPSTASH_REDIS_TOKEN: ${{ secrets.UPSTASH_REDIS_TOKEN }}
         run: python scripts/daily_sync.py
+
+      - name: Push updated index to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "sync@cinerecs.com"
+          git config --global user.name "CineRecs Sync"
+          git lfs install
+          git clone https://Pritu16345:$HF_TOKEN@huggingface.co/spaces/Pritu16345/cinerecs-api hf_space
+          cp backend/data/faiss_index.bin hf_space/data/faiss_index.bin
+          cp backend/data/embeddings.npy hf_space/data/embeddings.npy
+          cp backend/data/movie_id_map.json hf_space/data/movie_id_map.json
+          cd hf_space
+          git add data/
+          git commit -m "weekly index update"
+          git push

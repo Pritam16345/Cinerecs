@@ -3,7 +3,7 @@ CineRecs — Historical Import Script.
 Populate DB from TMDB and build FAISS index.
 """
 
-import os, sys, json, time, asyncio, logging, shutil
+import os, sys, json, time, asyncio, logging, shutil, argparse
 from datetime import date
 from pathlib import Path
 
@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS movies (
 
 
 async def rate_limit():
-    """TMDB rate limiting."""
     now = time.time()
     while _request_times and _request_times[0] < now - 10.0:
         _request_times.pop(0)
@@ -54,12 +53,10 @@ async def rate_limit():
 
 
 async def tmdb_get(client, endpoint, params=None):
-    """Fetch from TMDB with retry."""
     await rate_limit()
     url = f"{TMDB_BASE}{endpoint}"
     p = {"api_key": TMDB_API_KEY}
     if params: p.update(params)
-    
     for attempt in range(3):
         try:
             resp = await client.get(url, params=p, timeout=20.0)
@@ -75,7 +72,6 @@ async def tmdb_get(client, endpoint, params=None):
 
 
 def parse_movie(data):
-    """Normalize TMDB data."""
     genres = [g["name"] for g in data.get("genres", [])] if "genres" in data else []
     cast_list, director = [], None
     credits = data.get("credits", {})
@@ -102,22 +98,17 @@ def parse_movie(data):
 
 
 async def collect_ids(client, target=80000):
-    """Scrape movie IDs by year."""
     ids = set()
     logger.info(f"Target: {target} IDs")
     current_year = date.today().year
     years = list(range(current_year, 1950, -1))
-    
     for year in years:
         if len(ids) >= target: break
         logger.info(f"Year: {year}")
-        
-        # Strategy: Balanced distribution
         if year >= 2015: max_pages, min_votes = 150, 1
         elif year >= 2000: max_pages, min_votes = 80, 5
         elif year >= 1980: max_pages, min_votes = 50, 20
         else: max_pages, min_votes = 20, 50
-            
         for page in range(1, max_pages + 1):
             if len(ids) >= target: break
             data = await tmdb_get(client, "/discover/movie", {
@@ -127,8 +118,6 @@ async def collect_ids(client, target=80000):
             if not data or not data.get("results"): break
             for m in data["results"]: ids.add(m["id"])
             if page % 20 == 0: logger.info(f"  Count: {len(ids)}")
-
-    # Bonus essentials
     for name, ep in [("popular", "/movie/popular"), ("top_rated", "/movie/top_rated")]:
         if len(ids) >= target + 5000: break
         logger.info(f"Filling gaps via {name}")
@@ -151,21 +140,17 @@ poster_url=COALESCE(EXCLUDED.poster_url,movies.poster_url), language=COALESCE(EX
 
 
 async def fetch_and_store(pool, client, movie_ids):
-    """Download and save movie data."""
     batch, count, errors, total = [], 0, 0, len(movie_ids)
     start_time = time.time()
-    
     for i, tid in enumerate(movie_ids, 1):
         data = await tmdb_get(client, f"/movie/{tid}", {"append_to_response": "credits,keywords"})
         if data and data.get("id"): batch.append(parse_movie(data))
         else: errors += 1
-            
         if i % 50 == 0 or i == total:
             elapsed = time.time() - start_time
             rate = i / elapsed if elapsed > 0 else 0
             remaining = (total - i) / rate if rate > 0 else 0
-            logger.info(f"[{i}/{total}] { (i/total)*100:.1f}% | Rate: {rate:.1f} m/s | ETA: {int(remaining//60)}m")
-
+            logger.info(f"[{i}/{total}] {(i/total)*100:.1f}% | Rate: {rate:.1f} m/s | ETA: {int(remaining//60)}m")
         if len(batch) >= 200 or i == total:
             if batch:
                 async with pool.acquire() as conn:
@@ -180,7 +165,6 @@ async def fetch_and_store(pool, client, movie_ids):
 
 
 def build_faiss_index(movies):
-    """Create vector index."""
     logger.info(f"Indexing {len(movies)} movies...")
     model = SentenceTransformer(MODEL_NAME)
     texts, id_map = [], []
@@ -196,33 +180,90 @@ def build_faiss_index(movies):
 
 
 def save_locally(idx, id_map, emb):
-    """Save index files to backend/data/ for git lfs push."""
+    """Save index files to backend/data/ for git lfs push to HF."""
     LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
     faiss.write_index(idx, str(LOCAL_DATA_DIR / "faiss_index.bin"))
     with open(LOCAL_DATA_DIR / "movie_id_map.json", "w") as f:
         json.dump(id_map, f)
     np.save(str(LOCAL_DATA_DIR / "embeddings.npy"), emb)
-    logger.info(f"Saved index files locally to {LOCAL_DATA_DIR}")
+    logger.info(f"Saved index files to {LOCAL_DATA_DIR}")
 
 
 def upload_r2(local_path, r2_key):
-    """Push to R2 (optional)."""
-    if not all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
-        return False
     try:
         s3 = boto3.client("s3", endpoint_url=R2_ENDPOINT_URL, aws_access_key_id=R2_ACCESS_KEY_ID, aws_secret_access_key=R2_SECRET_ACCESS_KEY, region_name="auto")
         s3.upload_file(local_path, R2_BUCKET_NAME, r2_key)
-        logger.info(f"Uploaded {r2_key} to R2")
+        logger.info(f"Uploaded {r2_key}")
         return True
     except Exception as e:
         logger.error(f"R2 fail {r2_key}: {e}"); return False
+
+
+async def rebuild_index_only():
+    """Skip TMDB fetch — just rebuild FAISS from existing DB data and save locally."""
+    logger.info("=== REBUILD INDEX ONLY MODE ===")
+    logger.info("Reading movies from DB...")
+
+    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=10)
+    rows = await pool.fetch('SELECT tmdb_id,title,overview,genres,"cast" FROM movies ORDER BY tmdb_id')
+    movies = [
+        {
+            "tmdb_id": r["tmdb_id"],
+            "title": r["title"],
+            "overview": r.get("overview", ""),
+            "genres": list(r.get("genres") or []),
+            "cast": list(r.get("cast") or [])
+        }
+        for r in rows
+    ]
+    logger.info(f"Found {len(movies)} movies in DB")
+
+    if not movies:
+        logger.error("No movies in DB. Run full import first.")
+        await pool.close()
+        return
+
+    idx, id_map, emb = build_faiss_index(movies)
+
+    # 1. Save locally to backend/data/
+    save_locally(idx, id_map, emb)
+
+    # 2. Update embedding_idx in DB
+    logger.info("Updating embedding indices in DB...")
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            "UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2",
+            [(i, tid) for i, tid in enumerate(id_map)]
+        )
+
+    # 3. Optional R2 upload
+    if all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
+        logger.info("R2 credentials found, uploading backup...")
+        upload_r2(str(LOCAL_DATA_DIR / "faiss_index.bin"), "faiss_index.bin")
+        upload_r2(str(LOCAL_DATA_DIR / "movie_id_map.json"), "movie_id_map.json")
+        upload_r2(str(LOCAL_DATA_DIR / "embeddings.npy"), "embeddings.npy")
+    else:
+        logger.info("R2 credentials missing, skipping cloud backup.")
+
+    await pool.close()
+    logger.info("=== REBUILD COMPLETE ===")
+    logger.info(f"Files saved to: {LOCAL_DATA_DIR}")
+    logger.info("Next steps:")
+    logger.info("  cd backend")
+    logger.info("  git lfs install")
+    logger.info('  git lfs track "data/embeddings.npy"')
+    logger.info('  git lfs track "data/faiss_index.bin"')
+    logger.info('  git lfs track "data/movie_id_map.json"')
+    logger.info("  git add .gitattributes data/")
+    logger.info('  git commit -m "add faiss index via git lfs"')
+    logger.info("  git push hf main --force")
 
 
 async def main():
     t0 = time.time()
     if not TMDB_API_KEY: sys.exit("TMDB_API_KEY missing")
     if not DATABASE_URL: sys.exit("DATABASE_URL missing")
-    
+
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=10)
     async with pool.acquire() as conn: await conn.execute(SCHEMA_SQL)
 
@@ -231,7 +272,6 @@ async def main():
         existing_rows = await pool.fetch("SELECT tmdb_id FROM movies")
         existing_ids = {row["tmdb_id"] for row in existing_rows}
         missing_ids = list(ids - existing_ids)
-        
         logger.info(f"Resume: {len(ids & existing_ids)}/{len(ids)} in DB. Fetching {len(missing_ids)}.")
         if missing_ids: await fetch_and_store(pool, client, missing_ids)
 
@@ -240,15 +280,15 @@ async def main():
 
     if movies:
         idx, id_map, emb = build_faiss_index(movies)
-        
-        # 1. Save locally (Source of truth for HF)
+
+        # 1. Save locally first
         save_locally(idx, id_map, emb)
-        
+
         # 2. Update DB indices
         logger.info("Updating DB indices...")
         async with pool.acquire() as conn:
             await conn.executemany("UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2", [(i, tid) for i, tid in enumerate(id_map)])
-        
+
         # 3. Optional R2 upload
         if all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
             logger.info("R2 credentials found, uploading backup...")
@@ -261,10 +301,19 @@ async def main():
     await pool.close()
     logger.info(f"Done in {round(time.time()-t0,1)}s")
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rebuild-index-only", action="store_true",
+                        help="Skip TMDB fetch, rebuild FAISS from existing DB and save locally")
+    args = parser.parse_args()
+
     try:
-        asyncio.run(main())
+        if args.rebuild_index_only:
+            asyncio.run(rebuild_index_only())
+        else:
+            asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Import cancelled by user.")
+        logger.info("Cancelled by user.")
     except Exception as e:
         logger.error(f"Unexpected error: {e}")

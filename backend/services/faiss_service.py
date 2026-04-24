@@ -55,6 +55,25 @@ class FAISSService:
 
     def load_from_r2(self, force_refresh: bool = False) -> bool:
         """Load data from R2 or local cache."""
+        # Check local files first — avoids cloud bandwidth on every restart
+        data_dir = Path("data")
+        index_path = data_dir / INDEX_FILE
+        map_path = data_dir / MAP_FILE
+
+        if index_path.exists() and map_path.exists() and not force_refresh:
+            try:
+                self.index = faiss.read_index(str(index_path))
+                logger.info(f"FAISS loaded locally: {self.index.ntotal} vectors")
+                with open(map_path, "r") as f:
+                    self.movie_id_map = json.load(f)
+                emb_path = data_dir / EMBEDDINGS_FILE
+                if emb_path.exists():
+                    self.embeddings = np.load(str(emb_path))
+                self._loaded = True
+                return True
+            except Exception as e:
+                logger.warning(f"Local load failed, trying R2: {e}")
+
         if not all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
             logger.warning("R2 not configured, skipping load")
             return False
