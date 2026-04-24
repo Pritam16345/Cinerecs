@@ -11,6 +11,7 @@ from pathlib import Path
 import faiss
 import numpy as np
 import boto3
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger("cinerecs.faiss")
 
@@ -33,24 +34,17 @@ class FAISSService:
         self.index: faiss.IndexFlatIP | None = None
         self.movie_id_map: list[int] = []
         self.embeddings: np.ndarray | None = None
+        self.model: SentenceTransformer | None = None
         self._loaded = False
-        # model is NOT loaded here anymore — loaded on first use only
-        self._model = None
-
-    def _get_model(self):
-        """Load model only when first needed (lazy load)."""
-        if self._model is None:
-            # import here so it doesn't load at startup
-            from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading transformer: {MODEL_NAME}")
-            self._model = SentenceTransformer(MODEL_NAME)
-        return self._model
 
     def load_model(self) -> None:
-        """Initialize the transformer model (kept for compatibility)."""
-        self._get_model()
+        """Initialize the transformer model."""
+        if self.model is None:
+            logger.info(f"Loading transformer: {MODEL_NAME}")
+            self.model = SentenceTransformer(MODEL_NAME)
 
     def _get_s3_client(self):
+        """Configure R2 S3 client."""
         return boto3.client(
             "s3",
             endpoint_url=R2_ENDPOINT_URL,
@@ -60,7 +54,7 @@ class FAISSService:
         )
 
     def load_from_r2(self, force_refresh: bool = False) -> bool:
-        """Load FAISS index and map from R2. Does NOT load the model."""
+        """Load data from R2 or local cache."""
         if not all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
             logger.warning("R2 not configured, skipping load")
             return False
@@ -78,7 +72,7 @@ class FAISSService:
             if not index_path.exists() or force_refresh:
                 logger.info(f"Downloading {INDEX_FILE}...")
                 s3.download_file(R2_BUCKET_NAME, INDEX_FILE, str(index_path))
-
+            
             self.index = faiss.read_index(str(index_path))
             logger.info(f"FAISS loaded: {self.index.ntotal} vectors")
 
@@ -86,7 +80,7 @@ class FAISSService:
             if not map_path.exists() or force_refresh:
                 logger.info(f"Downloading {MAP_FILE}...")
                 s3.download_file(R2_BUCKET_NAME, MAP_FILE, str(map_path))
-
+            
             with open(map_path, "r") as f:
                 self.movie_id_map = json.load(f)
 
@@ -101,8 +95,6 @@ class FAISSService:
                 self.embeddings = np.load(str(emb_path))
 
             self._loaded = True
-            # NOTE: model is intentionally not loaded here
-            # it will load on first search request
             return True
 
         except Exception as e:
@@ -110,12 +102,14 @@ class FAISSService:
             return False
 
     def is_loaded(self) -> bool:
+        """Check if service is ready."""
         return self._loaded and self.index is not None
 
     def encode_query(self, text: str) -> np.ndarray:
         """Convert text to normalized vector."""
-        # model loads here on first call, not at startup
-        embedding = self._get_model().encode([text], convert_to_numpy=True)
+        if self.model is None:
+            self.load_model()
+        embedding = self.model.encode([text], convert_to_numpy=True)
         faiss.normalize_L2(embedding)
         return embedding
 
@@ -168,6 +162,7 @@ class FAISSService:
         return results[:top_k]
 
     def get_movie_embedding(self, tmdb_id: int) -> np.ndarray | None:
+        """Fetch stored embedding."""
         if self.embeddings is None or not self.movie_id_map:
             return None
         try:
