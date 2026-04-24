@@ -45,8 +45,10 @@ pipeline.log
 .DS_Store
 Thumbs.db
 
-# ── HF Deploy folder ──
+# ── Staging & Deploy ──
+hf_deploy/
 cinerecs-api/
 
 # ── Data folder ──
 data/
+backend/data/
