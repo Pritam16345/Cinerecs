@@ -2,15 +2,19 @@
 .env
 .env.local
 .env.production
+.env.development
 
 # ── Python ──
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
 *.egg-info/
 dist/
 build/
 *.egg
+.pytest_cache/
+.coverage
+htmlcov/
 
 # ── Node ──
 node_modules/
@@ -24,16 +28,26 @@ embeddings.npy
 movie_id_map.json
 *.pt
 *.pkl
+
+# ── Deployment & Staging ──
+hf_deploy/
+cinerecs-api/
+hf_space/
 tmp_index/
 tmp_sync/
+tmp_sync_rebuild/
 
 # ── Data ──
+data/
+backend/data/
 movielens_data/
 mlruns/
 
 # ── Logs ──
 pipeline.log
 *.log
+import.log
+sync.log
 
 # ── IDE ──
 .vscode/
@@ -44,9 +58,3 @@ pipeline.log
 # ── OS ──
 .DS_Store
 Thumbs.db
-
-# ── HF Deploy folder ──
-cinerecs-api/
-
-# ── Data folder ──
-data/
