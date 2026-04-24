@@ -1,0 +1,46 @@
+# ── Environment ──
+.env
+.env.local
+.env.production
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Node ──
+node_modules/
+.next/
+frontend/.next/
+frontend/node_modules/
+
+# ── FAISS / ML ──
+faiss_index.bin
+embeddings.npy
+movie_id_map.json
+*.pt
+*.pkl
+tmp_index/
+tmp_sync/
+
+# ── Data ──
+movielens_data/
+mlruns/
+
+# ── Logs ──
+pipeline.log
+*.log
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
