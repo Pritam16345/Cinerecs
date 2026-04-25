@@ -286,11 +286,14 @@ async def get_user_rating_stats(pool: asyncpg.Pool, user_id: str):
         SELECT
             COUNT(*) as total_rated,
             ROUND(AVG(rating)::numeric, 2) as avg_rating,
-            (SELECT unnest(m.genres) AS g
-             FROM ratings r2
-             JOIN movies m ON r2.movie_id = m.tmdb_id
-             WHERE r2.user_id = $1::uuid
-             GROUP BY g
+            (SELECT genre
+             FROM (
+                 SELECT unnest(m.genres) as genre
+                 FROM ratings r2
+                 JOIN movies m ON r2.movie_id = m.tmdb_id
+                 WHERE r2.user_id = $1::uuid
+             ) sub
+             GROUP BY genre
              ORDER BY COUNT(*) DESC
              LIMIT 1) as top_genre
         FROM ratings
