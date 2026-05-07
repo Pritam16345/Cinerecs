@@ -13,7 +13,7 @@
 **Discover your next favorite movie.**  
 A production-grade hybrid recommendation system combining semantic vector search (FAISS) with user-based collaborative filtering, backed by 100K+ movies from the TMDB catalog.
 
-[Live Demo](#https://cinerecs-ebon.vercel.app/)
+[Live Demo](https://cinerecs-ebon.vercel.app/)
 
 ---
 
