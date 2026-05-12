@@ -4,7 +4,7 @@
  * Provides login, register, logout + current user to all components.
  */
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { getStoredUser, logout as apiLogout, login as apiLogin, register as apiRegister } from "@/lib/api";
+import { getStoredUser, getStoredToken, setupProactiveRefresh, logout as apiLogout, login as apiLogin, register as apiRegister } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -15,7 +15,12 @@ export function AuthProvider({ children }) {
   // Restore session from localStorage on mount
   useEffect(() => {
     const stored = getStoredUser();
-    if (stored) setUser(stored);
+    if (stored) {
+      setUser(stored);
+      // Initialize proactive refresh
+      const token = getStoredToken();
+      if (token) setupProactiveRefresh(token);
+    }
     setLoading(false);
   }, []);
 
