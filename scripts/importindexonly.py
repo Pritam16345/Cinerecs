@@ -259,7 +259,7 @@ async def rebuild_index_only():
     logger.info("  git push hf main --force")
 
 
-async def main():
+async def main(target: int = 80000):
     t0 = time.time()
     if not TMDB_API_KEY: sys.exit("TMDB_API_KEY missing")
     if not DATABASE_URL: sys.exit("DATABASE_URL missing")
@@ -268,7 +268,7 @@ async def main():
     async with pool.acquire() as conn: await conn.execute(SCHEMA_SQL)
 
     async with httpx.AsyncClient() as client:
-        ids = await collect_ids(client, target=80000)
+        ids = await collect_ids(client, target=target)
         existing_rows = await pool.fetch("SELECT tmdb_id FROM movies")
         existing_ids = {row["tmdb_id"] for row in existing_rows}
         missing_ids = list(ids - existing_ids)
@@ -306,13 +306,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--rebuild-index-only", action="store_true",
                         help="Skip TMDB fetch, rebuild FAISS from existing DB and save locally")
+    parser.add_argument("--target", type=int, default=80000,
+                        help="Target number of popular movie IDs to collect (default: 80000)")
     args = parser.parse_args()
 
     try:
         if args.rebuild_index_only:
             asyncio.run(rebuild_index_only())
         else:
-            asyncio.run(main())
+            asyncio.run(main(target=args.target))
     except KeyboardInterrupt:
         logger.info("Cancelled by user.")
     except Exception as e:
