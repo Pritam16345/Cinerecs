@@ -33,7 +33,7 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           UPSTASH_REDIS_URL: ${{ secrets.UPSTASH_REDIS_URL }}
           UPSTASH_REDIS_TOKEN: ${{ secrets.UPSTASH_REDIS_TOKEN }}
-        run: python scripts/daily_sync.py
+        run: python scripts/weekly_sync.py
 
       - name: Push updated index to Hugging Face Space
         env:

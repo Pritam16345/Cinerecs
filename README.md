@@ -4,16 +4,16 @@
 
 ### AI-Powered Movie Recommendation Engine
 
-[![Daily Sync](https://img.shields.io/github/actions/workflow/status/Pritam16345/movie-recommender-app/daily_sync.yml?label=Daily%20Sync&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/Pritam16345/movie-recommender-app/actions/workflows/daily_sync.yml)
+[![Weekly Sync](https://img.shields.io/github/actions/workflow/status/Pritam16345/Cinerecs/weekly_sync.yml?label=Weekly%20Sync&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/Pritam16345/Cinerecs/actions/workflows/weekly_sync.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
 
 **Discover your next favorite movie.**  
-A production-grade hybrid recommendation system combining semantic vector search (FAISS) with user-based collaborative filtering, backed by 100K+ movies from the TMDB catalog.
+A production-grade hybrid recommendation system combining semantic vector search (FAISS) with user-based collaborative filtering, backed by 76K+ movies from the TMDB catalog.
 
-[Live Demo](https://cinerecs-ebon.vercel.app/)
+[🔗 Live Demo](https://cinerecs-ebon.vercel.app) · [📖 API Docs](https://pritu16345-cinerecs-api.hf.space/docs) · [📡 API Health](https://pritu16345-cinerecs-api.hf.space/health)
 
 ---
 
@@ -26,11 +26,22 @@ A production-grade hybrid recommendation system combining semantic vector search
 | 🧠 **Hybrid Recommendations** | `0.6× Content-Based (FAISS)` + `0.4× Collaborative Filtering` — blended scoring for superior accuracy |
 | 🔍 **Semantic Search** | Natural language queries powered by `all-MiniLM-L6-v2` sentence transformer |
 | ⌨️ **Real-time Autocomplete** | Prefix-matching suggestions with `< 50ms` response times |
-| 📦 **100K+ Movies** | Complete TMDB catalog with automated daily sync via GitHub Actions |
+| 📦 **76K+ Movies** | Complete TMDB catalog with automated weekly sync via GitHub Actions |
 | 🚀 **Optimized Cold Start** | Local FAISS index caching — sub-second backend restarts after first load |
 | 🎨 **Premium UI** | Glassmorphism dark theme, smooth micro-animations, fully responsive design |
-| 🔐 **Auth System** | JWT-based authentication with bcrypt password hashing (7-day token expiry) |
+| 🔐 **JWT Auth with Auto-Refresh** | 30-min access tokens + 7-day refresh tokens with proactive client-side refresh |
 | ⭐ **Personalization** | User ratings, watchlist management, and per-user recommendation stats |
+
+---
+
+## 🌐 Live Deployment
+
+| Component | URL | Hosting |
+|---|---|---|
+| **Frontend** | [cinerecs-ebon.vercel.app](https://cinerecs-ebon.vercel.app) | Vercel |
+| **Backend API** | [pritu16345-cinerecs-api.hf.space](https://pritu16345-cinerecs-api.hf.space) | Hugging Face Spaces |
+| **API Docs (Swagger)** | [/docs](https://pritu16345-cinerecs-api.hf.space/docs) | Auto-generated |
+| **API Docs (ReDoc)** | [/redoc](https://pritu16345-cinerecs-api.hf.space/redoc) | Auto-generated |
 
 ---
 
@@ -62,15 +73,15 @@ A production-grade hybrid recommendation system combining semantic vector search
 └──────────┼──────────────────────────────┼────────────────────────┘
            │                              │
      ┌─────▼──────┐                ┌──────▼──────┐
-     │ Cloudflare │                │   Upstash   │
-     │     R2     │                │    Redis    │
+     │ Backblaze  │                │   Upstash   │
+     │    B2      │                │    Redis    │
      │  (S3/B2)   │                │   (Cache)   │
      └────────────┘                └─────────────┘
            │
      ┌─────▼──────────────┐
-     │   CockroachDB      │
+     │    Supabase        │
      │   (PostgreSQL)     │
-     │   Serverless       │
+     │    Cloud DB        │
      └────────────────────┘
 ```
 
@@ -80,13 +91,14 @@ A production-grade hybrid recommendation system combining semantic vector search
 |---|---|---|
 | **Frontend** | Next.js 14, Tailwind CSS, React 18 | Server-side rendering, glassmorphism UI, responsive design |
 | **Backend** | FastAPI, AsyncPG, Pydantic v2 | Async REST API, request validation, auto-generated OpenAPI docs |
-| **ML/Search** | FAISS, Sentence-Transformers (`all-MiniLM-L6-v2`) | Semantic embeddings, cosine similarity search |
-| **Database** | CockroachDB (PostgreSQL-compatible) | Distributed SQL storage with serverless scaling |
+| **ML/Search** | FAISS, Sentence-Transformers (`all-MiniLM-L6-v2`) | Semantic embeddings (384-dim), cosine similarity search |
+| **Database** | Supabase (PostgreSQL) | Managed cloud PostgreSQL with 500 MB free storage |
 | **Cache** | Upstash Redis | Sub-millisecond caching for search results and recommendations |
-| **Object Storage** | Cloudflare R2 / Backblaze B2 | Persistent storage for FAISS index, embeddings, and ID maps |
-| **CI/CD** | GitHub Actions | Automated daily TMDB sync at 2:00 AM UTC |
-| **Auth** | JWT (python-jose) + bcrypt (passlib) | Stateless authentication with 7-day token expiry |
+| **Object Storage** | Backblaze B2 (S3-compatible) | Persistent storage for FAISS index, embeddings, and ID maps |
+| **CI/CD** | GitHub Actions | Automated weekly TMDB sync every Sunday at 2:00 AM UTC |
+| **Auth** | PyJWT (HS256) + bcrypt (passlib) | Stateless JWT auth with 30-min access / 7-day refresh tokens |
 | **Containerization** | Docker + Docker Compose | One-command local deployment |
+| **Hosting** | Vercel (frontend) + Hugging Face Spaces (backend) | Free-tier production hosting |
 
 ---
 
@@ -102,7 +114,7 @@ Each movie is encoded into a 384-dimensional embedding vector using `all-MiniLM-
 embedding = encode(title + overview + genres + cast)
 ```
 
-When you request similar movies, CineRecs performs an **inner-product similarity search** across all 100K+ vectors using Facebook's FAISS library, returning the top-k most semantically similar movies in milliseconds.
+When you request similar movies, CineRecs performs an **inner-product similarity search** across all 76K+ vectors using Facebook's FAISS library, returning the top-k most semantically similar movies in milliseconds.
 
 ### 2. Collaborative Filtering (User-Based)
 
@@ -130,6 +142,26 @@ This mitigates the cold-start problem — new users get content-based recommenda
 
 ---
 
+## 🔐 Authentication System
+
+CineRecs implements a robust JWT authentication system with automatic token refresh:
+
+| Feature | Details |
+|---|---|
+| **Access Token** | 30-minute expiry, contains user ID + email |
+| **Refresh Token** | 7-day expiry, used to obtain new access tokens |
+| **Algorithm** | HS256 with server-side secret |
+| **Password Hashing** | bcrypt via passlib |
+| **Auto-Refresh** | Client-side interceptor proactively refreshes tokens 60s before expiry |
+| **Token Expired Response** | `{"detail": "Token expired", "code": "TOKEN_EXPIRED"}` for easy client-side handling |
+
+**Endpoints:**
+- `POST /auth/register` — Create account → returns access + refresh tokens
+- `POST /auth/login` — Login → returns access + refresh tokens
+- `POST /auth/refresh` — Exchange refresh token for new access token
+
+---
+
 ## 📋 Prerequisites
 
 Before you begin, ensure you have:
@@ -143,9 +175,9 @@ You'll also need accounts (all have free tiers):
 | Service | Purpose | Sign Up |
 |---|---|---|
 | **TMDB** | Movie data API | [themoviedb.org](https://www.themoviedb.org/settings/api) |
-| **CockroachDB** | PostgreSQL database | [cockroachlabs.com](https://cockroachlabs.com/free-tier) |
+| **Supabase** | PostgreSQL database | [supabase.com](https://supabase.com) |
 | **Upstash** | Redis cache | [upstash.com](https://upstash.com) |
-| **Cloudflare R2** / **Backblaze B2** | Object storage for FAISS | [cloudflare.com](https://dash.cloudflare.com) / [backblaze.com](https://www.backblaze.com/b2/sign-up.html) |
+| **Backblaze B2** | Object storage for FAISS index | [backblaze.com](https://www.backblaze.com/b2/sign-up.html) |
 
 ---
 
@@ -154,8 +186,8 @@ You'll also need accounts (all have free tiers):
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/Pritam16345/movie-recommender-app.git
-cd movie-recommender-app
+git clone https://github.com/Pritam16345/Cinerecs.git
+cd Cinerecs
 cp .env.example .env
 ```
 
@@ -165,8 +197,8 @@ Open `.env` and fill in your credentials:
 # TMDB API (required)
 TMDB_API_KEY=your_tmdb_api_key
 
-# CockroachDB connection string
-DATABASE_URL=postgresql://user:password@host:26257/defaultdb?sslmode=verify-full
+# PostgreSQL database connection string (Supabase / CockroachDB / local)
+DATABASE_URL=postgresql://user:password@host:5432/dbname
 
 # Upstash Redis
 UPSTASH_REDIS_URL=rediss://default:token@endpoint:6379
@@ -175,7 +207,7 @@ UPSTASH_REDIS_TOKEN=your_upstash_token
 # Object Storage (S3-compatible)
 R2_ACCESS_KEY_ID=your_key_id
 R2_SECRET_ACCESS_KEY=your_secret_key
-R2_ENDPOINT_URL=https://s3.us-west-004.backblazeb2.com
+R2_ENDPOINT_URL=https://s3.us-east-005.backblazeb2.com
 R2_BUCKET_NAME=cinerecs
 
 # JWT Secret (generate: openssl rand -hex 32)
@@ -188,7 +220,7 @@ FRONTEND_URL=http://localhost:3000
 
 ### 2. Populate the Database
 
-Run the historical import to fetch ~100K movies from TMDB, store them in CockroachDB, build the FAISS index, and upload it to R2:
+Run the historical import to fetch ~80K movies from TMDB, store them in PostgreSQL, build the FAISS index, and upload it to B2:
 
 ```bash
 pip install -r backend/requirements.txt
@@ -237,13 +269,13 @@ CineRecs/
 ├── backend/
 │   ├── main.py                     # FastAPI entry point, lifespan, CORS, middleware
 │   ├── database.py                 # AsyncPG connection pool, all SQL queries
-│   ├── auth.py                     # JWT creation/verification, bcrypt hashing
+│   ├── auth.py                     # JWT creation/verification (access + refresh tokens)
 │   ├── models.py                   # Pydantic schemas (request/response validation)
 │   ├── Dockerfile                  # Python 3.11-slim container
 │   ├── requirements.txt            # Pinned Python dependencies
 │   │
 │   ├── routers/
-│   │   ├── auth.py                 # POST /auth/register, POST /auth/login
+│   │   ├── auth.py                 # POST /auth/register, /login, /refresh
 │   │   ├── movies.py               # GET /movies/trending, /search, /semantic, /{id}
 │   │   ├── recommend.py            # GET /recommend/similar, /user, /hybrid
 │   │   ├── ratings.py              # GET/POST /ratings, GET /ratings/stats
@@ -268,7 +300,7 @@ CineRecs/
 │   │   └── profile/page.js         # User profile (watchlist, ratings, stats)
 │   │
 │   ├── components/
-│   │   ├── AuthProvider.js          # React context for auth state
+│   │   ├── AuthProvider.js          # React context for auth state + proactive refresh
 │   │   ├── Navbar.js                # Sticky nav with responsive mobile menu
 │   │   ├── Footer.js                # 4-column footer with glow effects
 │   │   ├── HeroSearch.js            # Animated hero section with search
@@ -279,7 +311,7 @@ CineRecs/
 │   │   └── StarRating.js            # Interactive 1-5 star rating input
 │   │
 │   ├── lib/
-│   │   └── api.js                   # API client with auth token injection
+│   │   └── api.js                   # API client with auth token injection + auto-refresh
 │   │
 │   ├── tailwind.config.js           # Custom dark theme + animation keyframes
 │   ├── next.config.mjs              # Image domains + API proxy rewrites
@@ -287,11 +319,14 @@ CineRecs/
 │
 ├── scripts/
 │   ├── historical_import.py         # Full TMDB catalog import + FAISS build
-│   └── daily_sync.py                # Incremental sync (TMDB changes API)
+│   ├── importindexonly.py           # Rebuild FAISS index from existing DB data
+│   └── weekly_sync.py              # Incremental weekly sync (TMDB changes API)
+│
+├── hf_deploy/                       # Hugging Face Spaces deployment (backend mirror)
 │
 ├── .github/
 │   └── workflows/
-│       └── daily_sync.yml           # Cron job: 2 AM UTC daily
+│       └── weekly_sync.yml          # Cron job: 2 AM UTC every Sunday
 │
 ├── docker-compose.yml               # Backend + Frontend containers
 ├── .env.example                     # Template environment variables
@@ -302,14 +337,15 @@ CineRecs/
 
 ## 🔌 API Reference
 
-Base URL: `http://localhost:8000`
+Base URL: `https://pritu16345-cinerecs-api.hf.space`
 
 ### Authentication
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | — | Create account → returns JWT |
-| `POST` | `/auth/login` | — | Login → returns JWT |
+| `POST` | `/auth/register` | — | Create account → returns access + refresh JWT |
+| `POST` | `/auth/login` | — | Login → returns access + refresh JWT |
+| `POST` | `/auth/refresh` | — | Exchange refresh token for new access token |
 
 ### Movies
 
@@ -351,23 +387,24 @@ Base URL: `http://localhost:8000`
 
 ---
 
-## 🔄 Daily Sync Pipeline
+## 🔄 Weekly Sync Pipeline
 
-CineRecs automatically stays up-to-date via a GitHub Actions cron job:
+CineRecs automatically stays up-to-date via a GitHub Actions cron job that runs every Sunday:
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌────────────┐
 │  TMDB API   │────▶│  Fetch       │────▶│  Rebuild     │────▶│  Upload    │
-│  /changes   │     │  Changed     │     │  FAISS       │     │  to R2     │
+│  /changes   │     │  Changed     │     │  FAISS       │     │  to B2     │
 │  endpoint   │     │  Movies      │     │  Index       │     │            │
 └─────────────┘     └──────────────┘     └──────────────┘     └────────────┘
-     daily at              upsert to            encode all          push 3 files:
-     2:00 AM UTC           CockroachDB          100K+ movies        index, map, emb
+     weekly at             upsert to            encode all          push 3 files:
+     2:00 AM UTC           Supabase DB          76K+ movies         index, map, emb
+     every Sunday
 ```
 
-**Schedule:** Every day at 2:00 AM UTC  
+**Schedule:** Every Sunday at 2:00 AM UTC  
 **Trigger:** Also supports manual `workflow_dispatch`  
-**Script:** `scripts/daily_sync.py`
+**Script:** `scripts/weekly_sync.py`
 
 ---
 
@@ -396,14 +433,14 @@ The `docker-compose.yml` configures:
 | Variable | Required | Description |
 |---|---|---|
 | `TMDB_API_KEY` | ✅ | TMDB API key for movie data |
-| `DATABASE_URL` | ✅ | CockroachDB/PostgreSQL connection string |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string (Supabase / CockroachDB / local) |
 | `UPSTASH_REDIS_URL` | ✅ | Redis connection URL |
 | `UPSTASH_REDIS_TOKEN` | ⬜ | Redis auth token (if using Upstash) |
 | `R2_ACCESS_KEY_ID` | ✅ | S3-compatible storage key ID |
 | `R2_SECRET_ACCESS_KEY` | ✅ | S3-compatible storage secret |
 | `R2_ENDPOINT_URL` | ✅ | S3-compatible endpoint URL |
 | `R2_BUCKET_NAME` | ⬜ | Bucket name (default: `cinerecs`) |
-| `JWT_SECRET` | ✅ | Secret key for JWT signing |
+| `JWT_SECRET` | ✅ | Secret key for JWT signing (min 32 chars) |
 | `NEXT_PUBLIC_API_URL` | ⬜ | Backend URL (default: `http://localhost:8000`) |
 | `FRONTEND_URL` | ⬜ | Frontend URL for CORS (default: `http://localhost:3000`) |
 
@@ -416,7 +453,7 @@ The `docker-compose.yml` configures:
 | Semantic search latency | ~80ms (after model warm-up) |
 | Keyword search latency | ~15ms |
 | Autocomplete latency | ~10ms |
-| FAISS index size | ~150MB (100K movies, 384-dim) |
+| FAISS index size | ~116MB (76K movies, 384-dim) |
 | Redis cache hit rate | ~85% for trending/search |
 | Cold start (first request) | ~8s (model loading) |
 | Warm start | < 500ms |
@@ -444,8 +481,9 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 - **[TMDB](https://www.themoviedb.org/)** — Movie data and poster images
 - **[FAISS](https://github.com/facebookresearch/faiss)** — Efficient similarity search by Meta AI
 - **[Sentence-Transformers](https://www.sbert.net/)** — Pre-trained NLP models
-- **[CockroachDB](https://www.cockroachlabs.com/)** — Distributed PostgreSQL
+- **[Supabase](https://supabase.com/)** — Managed PostgreSQL database
 - **[Upstash](https://upstash.com/)** — Serverless Redis
+- **[Backblaze B2](https://www.backblaze.com/)** — S3-compatible object storage
 
 ---
 

@@ -150,7 +150,7 @@ async def search_tmdb_movies(query: str, page: int = 1) -> list[dict]:
 async def get_movie_changes(start_date: str = None, end_date: str = None) -> list[int]:
     """
     Get list of movie IDs that have been changed recently.
-    Used by daily sync to identify which movies need updating.
+    Used by weekly sync to identify which movies need updating.
     """
     params = {}
     if start_date:
