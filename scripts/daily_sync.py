@@ -175,9 +175,13 @@ async def main():
         save_index_locally(idx, id_map, emb)
 
         # Update embedding indices in DB
+        logger.info("Updating embedding indices in DB...")
         async with pool.acquire() as conn:
-            for i, tid in enumerate(id_map):
-                await conn.execute("UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2", i, tid)
+            await conn.executemany(
+                "UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2",
+                [(i, tid) for i, tid in enumerate(id_map)]
+            )
+
 
         # Optional R2 upload
         R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
