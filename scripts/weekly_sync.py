@@ -122,6 +122,22 @@ async def main():
             if page >= data.get("total_pages", 1): break
             page += 1
 
+        # Only sync updates for movies we already track, plus new trending movies
+        existing_rows = await pool.fetch("SELECT tmdb_id FROM movies")
+        existing_ids = {r["tmdb_id"] for r in existing_rows}
+
+        trending_ids = set()
+        try:
+            trending_data = await tmdb_get(client, "/trending/movie/week", {"page": "1"})
+            if trending_data and trending_data.get("results"):
+                for m in trending_data["results"]:
+                    if m.get("id"): trending_ids.add(m["id"])
+        except Exception as e:
+            logger.warning(f"Failed to fetch trending: {e}")
+
+        # Keep changes only for existing movies, plus any weekly trending movies
+        changed_ids = (changed_ids & existing_ids) | trending_ids
+
         logger.info(f"Updating {len(changed_ids)} movies")
 
         # 2. Update DB
