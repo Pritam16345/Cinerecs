@@ -122,8 +122,8 @@ async def main():
             if page >= data.get("total_pages", 1): break
             page += 1
 
-        # Only sync updates for movies we already track, plus new trending movies
-        existing_rows = await pool.fetch("SELECT tmdb_id FROM movies")
+        # Only sync updates for movies we already track with popularity > 4.0, plus new trending movies
+        existing_rows = await pool.fetch("SELECT tmdb_id FROM movies WHERE popularity > 4.0")
         existing_ids = {r["tmdb_id"] for r in existing_rows}
 
         trending_ids = set()
