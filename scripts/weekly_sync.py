@@ -142,6 +142,7 @@ async def main():
 
         # 2. Update DB
         count, errors = 0, 0
+        updated_tmdb_ids = set()
         for tid in changed_ids:
             data = await tmdb_get(client, f"/movie/{tid}", {"append_to_response": "credits,keywords"})
             if data and data.get("id"):
@@ -152,6 +153,7 @@ async def main():
                             m["genres"], m["cast"], m["director"], m["release_date"],
                             m["rating"], m["popularity"], m["poster_url"], m["language"])
                     count += 1
+                    updated_tmdb_ids.add(tid)
                 except Exception as e:
                     logger.warning(f"DB error {tid}: {e}"); errors += 1
             else:
@@ -174,21 +176,93 @@ async def main():
     ]
 
     if movies:
-        model = SentenceTransformer(MODEL_NAME)
-        texts, id_map = [], []
-        for m in movies:
+        existing_emb = None
+        existing_map = None
+        
+        # Check local first
+        local_emb_path = LOCAL_DATA_DIR / "embeddings.npy"
+        local_map_path = LOCAL_DATA_DIR / "movie_id_map.json"
+        
+        if local_emb_path.exists() and local_map_path.exists():
+            try:
+                logger.info("Loading existing embeddings and map from local directory...")
+                existing_emb = np.load(str(local_emb_path))
+                with open(local_map_path, "r") as f:
+                    existing_map = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load local index files: {e}")
+                
+        # If not local, try downloading from Hugging Face Space
+        if existing_emb is None or existing_map is None:
+            try:
+                logger.info("Downloading existing index files from Hugging Face Space...")
+                import urllib.request, io
+                
+                # Download movie_id_map
+                map_url = "https://huggingface.co/spaces/Pritu16345/cinerecs-api/resolve/main/data/movie_id_map.json"
+                req_map = urllib.request.Request(map_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_map, timeout=15) as resp:
+                    existing_map = json.loads(resp.read().decode())
+                
+                # Download embeddings
+                emb_url = "https://huggingface.co/spaces/Pritu16345/cinerecs-api/resolve/main/data/embeddings.npy"
+                req_emb = urllib.request.Request(emb_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_emb, timeout=45) as resp:
+                    existing_emb = np.load(io.BytesIO(resp.read()))
+                
+                logger.info(f"Successfully loaded HF index files (embeddings shape: {existing_emb.shape})")
+            except Exception as e:
+                logger.warning(f"Could not load/download existing index files: {e}. Will rebuild all embeddings from scratch.")
+                existing_emb = None
+                existing_map = None
+
+        # Build map of tmdb_id -> index in existing_emb
+        id_to_idx = {}
+        if existing_map is not None and existing_emb is not None:
+            id_to_idx = {tid: idx for idx, tid in enumerate(existing_map)}
+
+        # Prepare text representations and identify which need encoding
+        id_map = []
+        texts_to_encode = []
+        indices_to_encode = [] # Positions in the new list that need encoding
+        
+        # New embeddings array shell
+        dim = 384  # all-MiniLM-L6-v2 dimension
+        new_emb = np.zeros((len(movies), dim), dtype=np.float32)
+        
+        for i, m in enumerate(movies):
+            tid = m["tmdb_id"]
+            id_map.append(tid)
+            
+            # Text formatting
             g = " ".join(m.get("genres") or [])
             c = " ".join((m.get("cast") or [])[:5])
-            texts.append(f"{m['title']} {m.get('overview','')} {g} {c}")
-            id_map.append(m["tmdb_id"])
+            text = f"{m['title']} {m.get('overview','')} {g} {c}"
+            
+            # If movie was not updated this run and exists in the loaded map
+            if tid in id_to_idx and tid not in updated_tmdb_ids:
+                old_idx = id_to_idx[tid]
+                new_emb[i] = existing_emb[old_idx]
+            else:
+                texts_to_encode.append(text)
+                indices_to_encode.append(i)
 
-        emb = model.encode(texts, show_progress_bar=True, convert_to_numpy=True, batch_size=256).astype(np.float32)
-        faiss.normalize_L2(emb)
-        idx = faiss.IndexFlatIP(emb.shape[1])
-        idx.add(emb)
+        logger.info(f"Reused {len(movies) - len(indices_to_encode)} embeddings. Encoding {len(indices_to_encode)} updated/new movies.")
+
+        # Encode new/updated movies if any
+        if indices_to_encode:
+            model = SentenceTransformer(MODEL_NAME)
+            encoded = model.encode(texts_to_encode, show_progress_bar=True, convert_to_numpy=True, batch_size=256).astype(np.float32)
+            for local_idx, global_idx in enumerate(indices_to_encode):
+                new_emb[global_idx] = encoded[local_idx]
+
+        # Normalize and create FAISS index
+        faiss.normalize_L2(new_emb)
+        idx = faiss.IndexFlatIP(new_emb.shape[1])
+        idx.add(new_emb)
 
         # Save locally to backend/data/ — GitHub Actions will push this to HF
-        save_index_locally(idx, id_map, emb)
+        save_index_locally(idx, id_map, new_emb)
 
         # Update embedding indices in DB
         logger.info("Updating embedding indices in DB...")
