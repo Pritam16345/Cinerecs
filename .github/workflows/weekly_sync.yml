@@ -24,19 +24,6 @@ jobs:
           pip install -r backend/requirements.txt
           pip install huggingface_hub
 
-      - name: Clone Hugging Face Space index files
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          git config --global user.email "sync@cinerecs.com"
-          git config --global user.name "CineRecs Sync"
-          git lfs install
-          git clone https://Pritu16345:$HF_TOKEN@huggingface.co/spaces/Pritu16345/cinerecs-api hf_space
-          mkdir -p backend/data
-          if [ -d "hf_space/data" ]; then
-            cp -r hf_space/data/* backend/data/ 2>/dev/null || true
-          fi
-
       - name: Run weekly sync
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -50,11 +37,33 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python scripts/weekly_sync.py
 
-      - name: Push updated index to Hugging Face Space
+      - name: Reload index on Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          cp backend/data/faiss_index.bin hf_space/data/faiss_index.bin
-          cp backend/data/embeddings.npy hf_space/data/embeddings.npy
-          cp backend/data/movie_id_map.json hf_space/data/movie_id_map.json
-          cd hf_space
-          git add data/
-          git diff --staged --quiet || (git commit -m "weekly index update" && git push)
+          python -c "
+          import os
+          from huggingface_hub import HfApi
+          token = os.environ.get('HF_TOKEN')
+          if token:
+              api = HfApi(token=token)
+              try:
+                  api.upload_file(
+                      path_or_fileobj='backend/data/movie_id_map.json',
+                      path_in_repo='data/movie_id_map.json',
+                      repo_id='Pritu16345/cinerecs-api',
+                      repo_type='space',
+                      commit_message='weekly movie_id_map update'
+                  )
+                  print('✓ Updated movie_id_map.json in Hugging Face Space')
+              except Exception as e:
+                  print(f'Note on map upload: {e}')
+
+              try:
+                  api.restart_space(repo_id='Pritu16345/cinerecs-api')
+                  print('✓ Successfully restarted Hugging Face Space to load updated index from R2')
+              except Exception as e:
+                  print(f'Note on restart space: {e}')
+          else:
+              print('HF_TOKEN not provided, skipping Space restart')
+          "
