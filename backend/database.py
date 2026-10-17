@@ -224,6 +224,25 @@ async def batch_upsert_movies(pool: asyncpg.Pool, movies: list[dict]) -> int:
     return count
 
 
+async def get_or_fetch_movie(pool: asyncpg.Pool, tmdb_id: int):
+    """Fetch movie by TMDB ID; if not in DB, fetch from TMDB and auto-upsert."""
+    movie = await get_movie_by_id(pool, tmdb_id)
+    if movie is not None:
+        return movie
+
+    try:
+        from services.tmdb_service import get_movie_details
+        tmdb_movie = await get_movie_details(tmdb_id)
+        if tmdb_movie:
+            await upsert_movie(pool, tmdb_movie)
+            saved = await get_movie_by_id(pool, tmdb_id)
+            return saved if saved is not None else tmdb_movie
+    except Exception as e:
+        logger.warning(f"Failed to fetch and auto-upsert movie {tmdb_id} from TMDB: {e}")
+
+    return None
+
+
 async def get_all_movies_for_embedding(pool: asyncpg.Pool):
     """Fetch movie data for vector indexing."""
     return await pool.fetch("SELECT tmdb_id, title, overview, genres, \"cast\" FROM movies ORDER BY tmdb_id")

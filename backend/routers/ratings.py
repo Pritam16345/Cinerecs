@@ -6,7 +6,7 @@ Authenticated endpoints for submitting and viewing movie ratings.
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 
-from database import get_pool, get_user_ratings, upsert_rating, get_user_rating_stats, get_movie_by_id
+from database import get_pool, get_user_ratings, upsert_rating, get_user_rating_stats, get_movie_by_id, get_or_fetch_movie
 from models import RatingCreate, RatingOut, RatingStatsOut
 from auth import get_current_user
 from services.redis_service import invalidate_pattern
@@ -48,7 +48,7 @@ async def submit_rating(data: RatingCreate, user: dict = Depends(get_current_use
     pool = await get_pool()
 
     # Verify movie exists
-    movie = await get_movie_by_id(pool, data.movie_id)
+    movie = await get_or_fetch_movie(pool, data.movie_id)
     if movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
 

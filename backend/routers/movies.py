@@ -6,7 +6,15 @@ Endpoints for discovery and search.
 import logging
 from fastapi import APIRouter, Query, HTTPException
 
-from database import get_pool, get_movie_by_id, search_movies_by_title, get_movies_by_ids, get_movie_suggestions
+from database import (
+    get_pool,
+    get_movie_by_id,
+    get_or_fetch_movie,
+    batch_upsert_movies,
+    search_movies_by_title,
+    get_movies_by_ids,
+    get_movie_suggestions,
+)
 from models import MovieOut, MovieDetail, SearchResponse
 from services.redis_service import get_cached, set_cached
 from services.tmdb_service import get_trending as tmdb_trending
@@ -35,6 +43,11 @@ async def trending_movies():
     movies = await tmdb_trending(page=1)
     if movies:
         await set_cached(cache_key, movies, ttl=3600)
+        try:
+            pool = await get_pool()
+            await batch_upsert_movies(pool, movies)
+        except Exception as e:
+            logger.warning(f"Failed to batch upsert trending movies: {e}")
     return movies
 
 
@@ -131,7 +144,7 @@ async def semantic_search(
 async def get_movie_detail(tmdb_id: int):
     """Fetch full movie details."""
     pool = await get_pool()
-    movie = await get_movie_by_id(pool, tmdb_id)
+    movie = await get_or_fetch_movie(pool, tmdb_id)
 
     if movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")

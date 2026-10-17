@@ -6,7 +6,7 @@ Content-based (FAISS), collaborative filtering, and hybrid recommendations.
 import logging
 from fastapi import APIRouter, HTTPException, Query
 
-from database import get_pool, get_movie_by_id, get_movies_by_ids
+from database import get_pool, get_movie_by_id, get_or_fetch_movie, get_movies_by_ids
 from models import RecommendationItem, RecommendationResponse
 from services.redis_service import get_cached, set_cached
 from services.faiss_service import FAISSService
@@ -47,12 +47,24 @@ async def get_similar_movies(tmdb_id: int, limit: int = Query(10, ge=1, le=50)):
 
     # Verify movie exists
     pool = await get_pool()
-    movie = await get_movie_by_id(pool, tmdb_id)
+    movie = await get_or_fetch_movie(pool, tmdb_id)
     if movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
 
     # FAISS similarity search
     faiss_results = _faiss.get_similar_by_id(tmdb_id, top_k=limit)
+
+    if not faiss_results:
+        # Fallback for new movies not in FAISS index: semantic search on title/overview
+        query_text = f"{movie.get('title') or ''} {movie.get('overview') or ''}".strip()
+        if query_text:
+            try:
+                faiss_results = [
+                    r for r in _faiss.search(query_text, top_k=limit + 1)
+                    if r["tmdb_id"] != tmdb_id
+                ][:limit]
+            except Exception as e:
+                logger.warning(f"Semantic fallback failed for movie {tmdb_id}: {e}")
 
     if not faiss_results:
         return RecommendationResponse(recommendations=[], source="content", cached=False)

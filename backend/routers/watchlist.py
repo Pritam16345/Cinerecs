@@ -6,7 +6,7 @@ Authenticated endpoints for managing a user's movie watchlist.
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 
-from database import get_pool, get_user_watchlist, add_to_watchlist, remove_from_watchlist, get_movie_by_id
+from database import get_pool, get_user_watchlist, add_to_watchlist, remove_from_watchlist, get_movie_by_id, get_or_fetch_movie
 from models import WatchlistAdd, WatchlistItem
 from auth import get_current_user
 from services.redis_service import invalidate_pattern
@@ -49,7 +49,7 @@ async def add_movie_to_watchlist(data: WatchlistAdd, user: dict = Depends(get_cu
     pool = await get_pool()
 
     # Verify movie exists
-    movie = await get_movie_by_id(pool, data.movie_id)
+    movie = await get_or_fetch_movie(pool, data.movie_id)
     if movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
 
