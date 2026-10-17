@@ -1,12 +1,11 @@
 """
 CineRecs — Weekly Sync Script.
-Fetch TMDB changes and rebuild FAISS index.
+Discover new releases, fetch TMDB metadata, update database, and incrementally rebuild FAISS index.
 """
 
-import os, sys, json, time, asyncio, logging, shutil
+import os, sys, json, time, asyncio, logging
 from datetime import date, timedelta
 from pathlib import Path
-
 from typing import Any
 
 import httpx, asyncpg, numpy as np, faiss
@@ -23,6 +22,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 TMDB_BASE = "https://api.themoviedb.org/3"
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 MODEL_NAME = "all-MiniLM-L6-v2"
+
+_rate_lock = asyncio.Lock()
 _request_times: list[float] = []
 
 # Save index here so GitHub Actions can push to HF
@@ -30,28 +31,35 @@ LOCAL_DATA_DIR = Path(__file__).resolve().parent.parent / "backend" / "data"
 
 
 async def rate_limit():
-    now = time.time()
-    while _request_times and _request_times[0] < now - 10.0:
-        _request_times.pop(0)
-    if len(_request_times) >= 40:
-        sleep_time = _request_times[0] + 10.0 - now + 0.2
-        if sleep_time > 0: await asyncio.sleep(sleep_time)
-    _request_times.append(time.time())
+    """Stay safely under TMDB rate limit (40 req / 10s) with thread/coroutine lock."""
+    async with _rate_lock:
+        now = time.time()
+        while _request_times and _request_times[0] < now - 10.0:
+            _request_times.pop(0)
+        if len(_request_times) >= 38:
+            sleep_time = _request_times[0] + 10.0 - now + 0.25
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+        _request_times.append(time.time())
 
 
-async def tmdb_get(client, endpoint, params=None):
+async def tmdb_get(client: httpx.AsyncClient, endpoint: str, params: dict | None = None) -> dict | None:
+    """Make rate-limited GET request to TMDB."""
     await rate_limit()
     p = {"api_key": TMDB_API_KEY}
-    if params: p.update(params)
+    if params:
+        p.update(params)
     try:
         resp = await client.get(f"{TMDB_BASE}{endpoint}", params=p, timeout=15.0)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        logger.warning(f"TMDB error {endpoint}: {e}"); return None
+        logger.warning(f"TMDB error {endpoint}: {e}")
+        return None
 
 
-def parse_movie(data):
+def parse_movie(data: dict) -> dict:
+    """Parse TMDB movie object into structured format."""
     genres = [g["name"] for g in data.get("genres", [])] if "genres" in data else []
     cast_list, director = [], None
     credits = data.get("credits", {})
@@ -63,13 +71,19 @@ def parse_movie(data):
                 break
     rd = None
     if data.get("release_date"):
-        try: rd = date.fromisoformat(data["release_date"])
-        except ValueError: pass
+        try:
+            rd = date.fromisoformat(data["release_date"])
+        except ValueError:
+            pass
     pp = data.get("poster_path")
     return {
-        "tmdb_id": data.get("id"), "title": data.get("title", "Untitled"),
-        "overview": data.get("overview", ""), "genres": genres, "cast": cast_list,
-        "director": director, "release_date": rd,
+        "tmdb_id": data.get("id"),
+        "title": data.get("title", "Untitled"),
+        "overview": data.get("overview", ""),
+        "genres": genres,
+        "cast": cast_list,
+        "director": director,
+        "release_date": rd,
         "rating": float(data.get("vote_average", 0)),
         "popularity": float(data.get("popularity", 0)),
         "poster_url": f"{POSTER_BASE}{pp}" if pp else None,
@@ -78,41 +92,48 @@ def parse_movie(data):
 
 
 UPSERT_SQL = """
-INSERT INTO movies (tmdb_id,title,overview,genres,"cast",director,release_date,rating,popularity,poster_url,language,updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
-ON CONFLICT (tmdb_id) DO UPDATE SET title=EXCLUDED.title, overview=COALESCE(EXCLUDED.overview,movies.overview),
-genres=COALESCE(EXCLUDED.genres,movies.genres), "cast"=COALESCE(EXCLUDED."cast",movies."cast"),
-director=COALESCE(EXCLUDED.director,movies.director), release_date=COALESCE(EXCLUDED.release_date,movies.release_date),
-rating=COALESCE(EXCLUDED.rating,movies.rating), popularity=COALESCE(EXCLUDED.popularity,movies.popularity),
-poster_url=COALESCE(EXCLUDED.poster_url,movies.poster_url), language=COALESCE(EXCLUDED.language,movies.language), updated_at=now()
+INSERT INTO movies (tmdb_id, title, overview, genres, "cast", director, release_date, rating, popularity, poster_url, language, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+ON CONFLICT (tmdb_id) DO UPDATE SET
+    title = EXCLUDED.title,
+    overview = COALESCE(EXCLUDED.overview, movies.overview),
+    genres = COALESCE(EXCLUDED.genres, movies.genres),
+    "cast" = COALESCE(EXCLUDED."cast", movies."cast"),
+    director = COALESCE(EXCLUDED.director, movies.director),
+    release_date = COALESCE(EXCLUDED.release_date, movies.release_date),
+    rating = COALESCE(EXCLUDED.rating, movies.rating),
+    popularity = COALESCE(EXCLUDED.popularity, movies.popularity),
+    poster_url = COALESCE(EXCLUDED.poster_url, movies.poster_url),
+    language = COALESCE(EXCLUDED.language, movies.language),
+    updated_at = now()
 """
 
 
-def save_index_locally(idx, id_map, emb):
+def save_index_locally(idx: Any, id_map: list[int], emb: np.ndarray):
     """Save rebuilt index to backend/data/ for HF push."""
     LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
     faiss.write_index(idx, str(LOCAL_DATA_DIR / "faiss_index.bin"))
     with open(LOCAL_DATA_DIR / "movie_id_map.json", "w") as f:
         json.dump(id_map, f)
     np.save(str(LOCAL_DATA_DIR / "embeddings.npy"), emb)
-    logger.info(f"Index saved to {LOCAL_DATA_DIR}")
+    logger.info(f"Index successfully saved to {LOCAL_DATA_DIR}")
 
 
 async def main():
     t0 = time.time()
     if not TMDB_API_KEY or not DATABASE_URL:
-        sys.exit("Env vars missing")
+        sys.exit("Critical environment variables missing (TMDB_API_KEY or DATABASE_URL)")
 
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=5)
     if pool is None:
         sys.exit("Failed to create database connection pool")
 
-    # 1. Discover new and trending movies from TMDB
     today = date.today().isoformat()
     week_ago = (date.today() - timedelta(days=7)).isoformat()
     two_months_ago = (date.today() - timedelta(days=60)).isoformat()
 
     async with httpx.AsyncClient() as client:
+        # 1. Discover new and trending movies from TMDB
         logger.info(f"Syncing changes and discovering new movies for week of {today}")
         candidate_ids = set()
 
@@ -178,30 +199,41 @@ async def main():
         new_ids = movies_to_sync - existing_ids
         logger.info(f"Targeting {len(movies_to_sync)} movies ({len(new_ids)} brand new additions, {len(movies_to_sync - new_ids)} updates)")
 
-        # 2. Update DB
-        count, errors = 0, 0
-        updated_tmdb_ids = set()
-        for tid in movies_to_sync:
-            data = await tmdb_get(client, f"/movie/{tid}", {"append_to_response": "credits,keywords"})
-            if data and data.get("id"):
-                m = parse_movie(data)
-                try:
-                    async with pool.acquire() as conn:
-                        await conn.execute(UPSERT_SQL, m["tmdb_id"], m["title"], m["overview"],
-                            m["genres"], m["cast"], m["director"], m["release_date"],
-                            m["rating"], m["popularity"], m["poster_url"], m["language"])
-                    count += 1
-                    updated_tmdb_ids.add(tid)
-                except Exception as e:
-                    logger.warning(f"DB error {tid}: {e}"); errors += 1
-            else:
-                errors += 1
+        # 2. Fetch full metadata in parallel batches
+        semaphore = asyncio.Semaphore(6)
 
-    logger.info(f"DB update: {count} OK, {errors} FAIL")
+        async def fetch_one(tid: int):
+            async with semaphore:
+                data = await tmdb_get(client, f"/movie/{tid}", {"append_to_response": "credits,keywords"})
+                if data and data.get("id"):
+                    return parse_movie(data)
+                return None
 
-    # 3. Rebuild FAISS index
-    logger.info("Rebuilding FAISS index...")
-    rows = await pool.fetch('SELECT tmdb_id,title,overview,genres,"cast" FROM movies ORDER BY tmdb_id')
+        logger.info(f"Fetching metadata for {len(movies_to_sync)} movies with pipelined workers...")
+        tasks = [fetch_one(tid) for tid in movies_to_sync]
+        results = await asyncio.gather(*tasks)
+
+        parsed_movies = [m for m in results if m is not None]
+        updated_tmdb_ids = {m["tmdb_id"] for m in parsed_movies}
+
+        if parsed_movies:
+            logger.info(f"Upserting {len(parsed_movies)} movies into database using single batch transaction...")
+            params = [
+                (
+                    m["tmdb_id"], m["title"], m["overview"], m["genres"],
+                    m["cast"], m["director"], m["release_date"], m["rating"],
+                    m["popularity"], m["poster_url"], m["language"]
+                )
+                for m in parsed_movies
+            ]
+            async with pool.acquire() as conn:
+                await conn.executemany(UPSERT_SQL, params)
+
+        logger.info(f"DB update complete: {len(parsed_movies)} OK, {len(movies_to_sync) - len(parsed_movies)} FAIL")
+
+    # 3. Rebuild FAISS index incrementally
+    logger.info("Rebuilding FAISS vector index...")
+    rows = await pool.fetch('SELECT tmdb_id, title, overview, genres, "cast" FROM movies ORDER BY tmdb_id')
     movies = [
         {
             "tmdb_id": r["tmdb_id"],
@@ -217,20 +249,23 @@ async def main():
         existing_emb = None
         existing_map = None
         
-        # Check local first
         local_emb_path = LOCAL_DATA_DIR / "embeddings.npy"
         local_map_path = LOCAL_DATA_DIR / "movie_id_map.json"
         
+        # A. Check local directory first
         if local_emb_path.exists() and local_map_path.exists():
             try:
                 logger.info("Loading existing embeddings and map from local directory...")
                 existing_emb = np.load(str(local_emb_path))
                 with open(local_map_path, "r") as f:
                     existing_map = json.load(f)
+                logger.info(f"Loaded local index files (embeddings shape: {existing_emb.shape})")
             except Exception as e:
                 logger.warning(f"Failed to load local index files: {e}")
-                
-        # If not local, try Cloudflare R2 first
+                existing_emb = None
+                existing_map = None
+
+        # B. If not local, try Cloudflare R2 bucket
         if existing_emb is None or existing_map is None:
             R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
             R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
@@ -251,11 +286,11 @@ async def main():
                 except Exception as e:
                     logger.warning(f"Failed to download index files from R2: {e}")
 
-        # If still not loaded, download from Hugging Face Space using huggingface_hub (properly resolves Git LFS)
+        # C. If still not loaded, download from Hugging Face Space using huggingface_hub (properly resolves Git LFS)
         if existing_emb is None or existing_map is None:
             try:
                 from huggingface_hub import hf_hub_download
-                logger.info("Downloading existing index files from Hugging Face Space using hf_hub_download...")
+                logger.info("Downloading existing index files from Hugging Face Space via hf_hub_download...")
                 map_file = hf_hub_download(repo_id="Pritu16345/cinerecs-api", filename="data/movie_id_map.json", repo_type="space")
                 emb_file = hf_hub_download(repo_id="Pritu16345/cinerecs-api", filename="data/embeddings.npy", repo_type="space")
                 with open(map_file, "r") as f:
@@ -263,7 +298,7 @@ async def main():
                 existing_emb = np.load(emb_file)
                 logger.info(f"Successfully loaded HF index files (embeddings shape: {existing_emb.shape})")
             except Exception as e:
-                logger.warning(f"Could not load index files via hf_hub_download: {e}. Will rebuild embeddings for target movies.")
+                logger.warning(f"Could not load index files via hf_hub_download: {e}")
                 existing_emb = None
                 existing_map = None
 
@@ -275,9 +310,8 @@ async def main():
         # Prepare text representations and identify which need encoding
         id_map = []
         texts_to_encode = []
-        indices_to_encode = [] # Positions in the new list that need encoding
+        indices_to_encode = []
         
-        # New embeddings array shell
         dim = 384  # all-MiniLM-L6-v2 dimension
         new_emb = np.zeros((len(movies), dim), dtype=np.float32)
         
@@ -285,7 +319,6 @@ async def main():
             tid = m["tmdb_id"]
             id_map.append(tid)
             
-            # Text formatting
             g = " ".join(m.get("genres") or [])
             c = " ".join((m.get("cast") or [])[:5])
             text = f"{m['title']} {m.get('overview','')} {g} {c}"
@@ -298,12 +331,13 @@ async def main():
                 texts_to_encode.append(text)
                 indices_to_encode.append(i)
 
-        logger.info(f"Reused {len(movies) - len(indices_to_encode)} embeddings. Encoding {len(indices_to_encode)} updated/new movies.")
+        logger.info(f"Reused {len(movies) - len(indices_to_encode)} embeddings. Encoding {len(indices_to_encode)} new/updated movies.")
 
-        # Encode new/updated movies if any
+        # Encode new/updated movies only
         if indices_to_encode:
+            logger.info(f"Generating embeddings for {len(indices_to_encode)} movies...")
             model = SentenceTransformer(MODEL_NAME)
-            encoded = np.asarray(model.encode(texts_to_encode, show_progress_bar=True, convert_to_numpy=True, batch_size=256), dtype=np.float32)
+            encoded = np.asarray(model.encode(texts_to_encode, show_progress_bar=False, convert_to_numpy=True, batch_size=128), dtype=np.float32)
             for local_idx, global_idx in enumerate(indices_to_encode):
                 new_emb[global_idx] = encoded[local_idx]
 
@@ -312,39 +346,77 @@ async def main():
         idx: Any = faiss.IndexFlatIP(new_emb.shape[1])
         idx.add(new_emb)
 
-        # Save locally to backend/data/ — GitHub Actions will push this to HF
+        # Save locally to backend/data/
         save_index_locally(idx, id_map, new_emb)
 
-        # Update embedding indices in DB
-        logger.info("Updating embedding indices in DB...")
-        async with pool.acquire() as conn:
-            await conn.executemany(
-                "UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2",
-                [(i, tid) for i, tid in enumerate(id_map)]
-            )
+        # Update embedding indices in DB ONLY for newly added or updated movies (avoids updating 15k unchanged rows)
+        new_indices = [(i, tid) for i, tid in enumerate(id_map) if tid in updated_tmdb_ids or tid in new_ids]
+        if new_indices:
+            logger.info(f"Updating embedding indices in DB for {len(new_indices)} new/updated movies...")
+            async with pool.acquire() as conn:
+                await conn.executemany(
+                    "UPDATE movies SET embedding_idx=$1 WHERE tmdb_id=$2",
+                    new_indices
+                )
 
-
-        # Optional R2 upload
+        # Optional R2 backup
         R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
         R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
         R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL")
         R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "cinerecs")
 
         if all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
-            import boto3
             try:
+                import boto3
                 s3 = boto3.client("s3", endpoint_url=R2_ENDPOINT_URL, aws_access_key_id=R2_ACCESS_KEY_ID, aws_secret_access_key=R2_SECRET_ACCESS_KEY, region_name="auto")
                 s3.upload_file(str(LOCAL_DATA_DIR / "faiss_index.bin"), R2_BUCKET_NAME, "faiss_index.bin")
                 s3.upload_file(str(LOCAL_DATA_DIR / "movie_id_map.json"), R2_BUCKET_NAME, "movie_id_map.json")
                 s3.upload_file(str(LOCAL_DATA_DIR / "embeddings.npy"), R2_BUCKET_NAME, "embeddings.npy")
-                logger.info("Optional R2 backup successful")
+                logger.info("Optional Cloudflare R2 backup successful")
             except Exception as e:
-                logger.warning(f"Optional R2 backup failed: {e}")
+                logger.warning(f"Optional R2 backup skipped/failed: {e}")
 
-        logger.info(f"Index rebuilt with {len(movies)} movies")
+        # Optional direct Hugging Face Space upload via HfApi (handles LFS and chunking cleanly)
+        HF_TOKEN = os.getenv("HF_TOKEN")
+        if HF_TOKEN:
+            try:
+                from huggingface_hub import HfApi
+                logger.info("Uploading updated index files to Hugging Face Space via HfApi...")
+                hf_api = HfApi(token=HF_TOKEN)
+                hf_api.upload_folder(
+                    folder_path=str(LOCAL_DATA_DIR),
+                    path_in_repo="data",
+                    repo_id="Pritu16345/cinerecs-api",
+                    repo_type="space",
+                    commit_message="weekly index update"
+                )
+                logger.info("Successfully pushed updated index to Hugging Face Space via HfApi")
+            except Exception as e:
+                logger.warning(f"HfApi upload fallback skipped: {e}")
+
+        # Invalidate Redis cache so new trending and recommendations show up immediately
+        UPSTASH_REDIS_URL = os.getenv("UPSTASH_REDIS_URL")
+        UPSTASH_REDIS_TOKEN = os.getenv("UPSTASH_REDIS_TOKEN")
+        if UPSTASH_REDIS_URL:
+            try:
+                import redis.asyncio as aioredis
+                rc = aioredis.from_url(
+                    UPSTASH_REDIS_URL,
+                    password=UPSTASH_REDIS_TOKEN if UPSTASH_REDIS_TOKEN else None,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
+                await rc.delete("movies:trending:v3")
+                logger.info("Successfully cleared Redis trending cache")
+                await rc.close()
+            except Exception as e:
+                logger.warning(f"Redis cache invalidation skipped/failed: {e}")
+
+        logger.info(f"Index rebuilt successfully with {len(movies)} total movies")
 
     await pool.close()
-    logger.info(f"Sync complete in {round(time.time() - t0, 1)}s")
+    logger.info(f"Weekly sync completed successfully in {round(time.time() - t0, 1)}s")
 
 
 if __name__ == "__main__":
