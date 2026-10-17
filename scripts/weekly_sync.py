@@ -7,6 +7,8 @@ import os, sys, json, time, asyncio, logging, shutil
 from datetime import date, timedelta
 from pathlib import Path
 
+from typing import Any
+
 import httpx, asyncpg, numpy as np, faiss
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -102,6 +104,8 @@ async def main():
         sys.exit("Env vars missing")
 
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=5)
+    if pool is None:
+        sys.exit("Failed to create database connection pool")
 
     # 1. Get changes from last 7 days (weekly sync)
     today = date.today().isoformat()
@@ -240,7 +244,7 @@ async def main():
             text = f"{m['title']} {m.get('overview','')} {g} {c}"
             
             # If movie was not updated this run and exists in the loaded map
-            if tid in id_to_idx and tid not in updated_tmdb_ids:
+            if existing_emb is not None and tid in id_to_idx and tid not in updated_tmdb_ids:
                 old_idx = id_to_idx[tid]
                 new_emb[i] = existing_emb[old_idx]
             else:
@@ -252,13 +256,13 @@ async def main():
         # Encode new/updated movies if any
         if indices_to_encode:
             model = SentenceTransformer(MODEL_NAME)
-            encoded = model.encode(texts_to_encode, show_progress_bar=True, convert_to_numpy=True, batch_size=256).astype(np.float32)
+            encoded = np.asarray(model.encode(texts_to_encode, show_progress_bar=True, convert_to_numpy=True, batch_size=256), dtype=np.float32)
             for local_idx, global_idx in enumerate(indices_to_encode):
                 new_emb[global_idx] = encoded[local_idx]
 
         # Normalize and create FAISS index
         faiss.normalize_L2(new_emb)
-        idx = faiss.IndexFlatIP(new_emb.shape[1])
+        idx: Any = faiss.IndexFlatIP(new_emb.shape[1])
         idx.add(new_emb)
 
         # Save locally to backend/data/ — GitHub Actions will push this to HF

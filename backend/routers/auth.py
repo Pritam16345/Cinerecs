@@ -90,6 +90,8 @@ async def refresh(data: TokenRefreshRequest):
         # Decode and validate refresh token
         payload = decode_token(data.refresh_token, expected_type="refresh")
         user_id = payload.get("sub")
+        if not user_id or not isinstance(user_id, str):
+            raise HTTPException(status_code=401, detail="Invalid token: no subject")
         
         # Get user to get their email
         pool = await get_pool()

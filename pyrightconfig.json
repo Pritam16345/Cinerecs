@@ -1,0 +1,7 @@
+{
+  "extraPaths": [
+    "backend",
+    "hf_deploy",
+    "scripts"
+  ]
+}

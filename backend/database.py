@@ -70,6 +70,8 @@ async def get_pool() -> asyncpg.Pool:
             max_size=10,
             command_timeout=30,
         )
+    if _pool is None:
+        raise RuntimeError("Failed to initialize database connection pool")
     return _pool
 
 

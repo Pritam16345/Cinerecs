@@ -16,7 +16,7 @@ DEFAULT_TTL = 3600  # 1 hour
 
 _client: redis.Redis | None = None
 
-async def get_redis() -> redis.Redis:
+async def get_redis() -> redis.Redis | None:
     """Return the singleton async Redis client."""
     global _client
     if _client is None:

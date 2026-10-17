@@ -6,6 +6,7 @@ Handles vector search and R2 persistence.
 import os
 import json
 import logging
+from typing import Any
 from pathlib import Path
 
 import faiss
@@ -31,7 +32,7 @@ class FAISSService:
     """Semantic search via FAISS and sentence-transformers."""
 
     def __init__(self):
-        self.index: faiss.IndexFlatIP | None = None
+        self.index: Any = None
         self.movie_id_map: list[int] = []
         self.embeddings: np.ndarray | None = None
         self.model: SentenceTransformer | None = None
@@ -63,7 +64,8 @@ class FAISSService:
         if index_path.exists() and map_path.exists() and not force_refresh:
             try:
                 self.index = faiss.read_index(str(index_path))
-                logger.info(f"FAISS loaded locally: {self.index.ntotal} vectors")
+                ntotal = self.index.ntotal if self.index is not None else 0
+                logger.info(f"FAISS loaded locally: {ntotal} vectors")
                 with open(map_path, "r") as f:
                     self.movie_id_map = json.load(f)
                 emb_path = data_dir / EMBEDDINGS_FILE
@@ -93,7 +95,8 @@ class FAISSService:
                 s3.download_file(R2_BUCKET_NAME, INDEX_FILE, str(index_path))
             
             self.index = faiss.read_index(str(index_path))
-            logger.info(f"FAISS loaded: {self.index.ntotal} vectors")
+            ntotal = self.index.ntotal if self.index is not None else 0
+            logger.info(f"FAISS loaded: {ntotal} vectors")
 
             # 2. Load Movie ID map
             if not map_path.exists() or force_refresh:
@@ -128,13 +131,15 @@ class FAISSService:
         """Convert text to normalized vector."""
         if self.model is None:
             self.load_model()
-        embedding = self.model.encode([text], convert_to_numpy=True)
+        if self.model is None:
+            raise RuntimeError("SentenceTransformer model is not loaded")
+        embedding = np.asarray(self.model.encode([text], convert_to_numpy=True), dtype=np.float32)
         faiss.normalize_L2(embedding)
         return embedding
 
     def search(self, query_text: str, top_k: int = 10) -> list[dict]:
         """Search by query text."""
-        if not self.is_loaded():
+        if not self.is_loaded() or self.index is None:
             return []
 
         query_embedding = self.encode_query(query_text)
@@ -153,7 +158,7 @@ class FAISSService:
 
     def get_similar_by_id(self, tmdb_id: int, top_k: int = 10) -> list[dict]:
         """Find movies similar to target ID."""
-        if not self.is_loaded():
+        if not self.is_loaded() or self.index is None:
             return []
 
         try:
@@ -164,7 +169,8 @@ class FAISSService:
         if self.embeddings is not None:
             query_vec = self.embeddings[idx:idx + 1].copy()
         else:
-            query_vec = np.zeros((1, self.index.d), dtype=np.float32)
+            dim = getattr(self.index, "d", 384)
+            query_vec = np.zeros((1, dim), dtype=np.float32)
             self.index.reconstruct(idx, query_vec[0])
 
         faiss.normalize_L2(query_vec)

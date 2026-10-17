@@ -7,6 +7,8 @@ import os, sys, json, time, asyncio, logging, shutil, argparse
 from datetime import date
 from pathlib import Path
 
+from typing import Any
+
 import httpx, asyncpg, numpy as np, faiss, boto3
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -172,9 +174,9 @@ def build_faiss_index(movies):
         g, c = " ".join(m.get("genres") or []), " ".join((m.get("cast") or [])[:5])
         texts.append(f"{m['title']} {m.get('overview','')} {g} {c}")
         id_map.append(m["tmdb_id"])
-    emb = model.encode(texts, show_progress_bar=True, convert_to_numpy=True, batch_size=256).astype(np.float32)
+    emb = np.asarray(model.encode(texts, show_progress_bar=True, convert_to_numpy=True, batch_size=256), dtype=np.float32)
     faiss.normalize_L2(emb)
-    idx = faiss.IndexFlatIP(emb.shape[1])
+    idx: Any = faiss.IndexFlatIP(emb.shape[1])
     idx.add(emb)
     return idx, id_map, emb
 
@@ -205,6 +207,7 @@ async def rebuild_index_only():
     logger.info("Reading movies from DB...")
 
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=10)
+    if pool is None: sys.exit("Failed to create database connection pool")
     rows = await pool.fetch('SELECT tmdb_id,title,overview,genres,"cast" FROM movies ORDER BY tmdb_id')
     movies = [
         {
@@ -265,6 +268,7 @@ async def main(target: int = 80000):
     if not DATABASE_URL: sys.exit("DATABASE_URL missing")
 
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=2, max_size=10)
+    if pool is None: sys.exit("Failed to create database connection pool")
     async with pool.acquire() as conn: await conn.execute(SCHEMA_SQL)
 
     async with httpx.AsyncClient() as client:

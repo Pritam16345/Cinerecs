@@ -41,7 +41,7 @@ TMDB_GENRE_MAP = {
     37: "Western"
 }
 
-async def _tmdb_get(endpoint: str, params: dict = None, timeout: float = 10.0) -> dict | None:
+async def _tmdb_get(endpoint: str, params: dict | None = None, timeout: float = 10.0) -> dict | None:
     """
     Make a GET request to the TMDB API.
     Returns parsed JSON or None on failure.
@@ -147,7 +147,7 @@ async def search_tmdb_movies(query: str, page: int = 1) -> list[dict]:
     return [_parse_movie(m) for m in data.get("results", [])]
 
 
-async def get_movie_changes(start_date: str = None, end_date: str = None) -> list[int]:
+async def get_movie_changes(start_date: str | None = None, end_date: str | None = None) -> list[int]:
     """
     Get list of movie IDs that have been changed recently.
     Used by weekly sync to identify which movies need updating.
