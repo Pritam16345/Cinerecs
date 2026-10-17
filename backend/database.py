@@ -339,7 +339,7 @@ async def get_movies_liked_by_users(pool: asyncpg.Pool, user_ids: list[str], exc
         ORDER BY freq DESC, avg_rating DESC
         LIMIT $4
         """,
-        [str(uid) for uid in user_ids], min_rating, exclude_movie_ids, limit,
+        user_ids, min_rating, exclude_movie_ids, limit,
     )
 
 
