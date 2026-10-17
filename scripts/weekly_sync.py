@@ -376,23 +376,22 @@ async def main():
             except Exception as e:
                 logger.warning(f"Optional R2 backup skipped/failed: {e}")
 
-        # Optional direct Hugging Face Space upload via HfApi (handles LFS and chunking cleanly)
+        # Optional direct Hugging Face Space map upload (avoids uploading large binaries to HF Git LFS)
         HF_TOKEN = os.getenv("HF_TOKEN")
         if HF_TOKEN:
             try:
                 from huggingface_hub import HfApi
-                logger.info("Uploading updated index files to Hugging Face Space via HfApi...")
                 hf_api = HfApi(token=HF_TOKEN)
-                hf_api.upload_folder(
-                    folder_path=str(LOCAL_DATA_DIR),
-                    path_in_repo="data",
+                hf_api.upload_file(
+                    path_or_fileobj=str(LOCAL_DATA_DIR / "movie_id_map.json"),
+                    path_in_repo="data/movie_id_map.json",
                     repo_id="Pritu16345/cinerecs-api",
                     repo_type="space",
-                    commit_message="weekly index update"
+                    commit_message="weekly movie_id_map update"
                 )
-                logger.info("Successfully pushed updated index to Hugging Face Space via HfApi")
+                logger.info("Successfully updated movie_id_map.json in Hugging Face Space")
             except Exception as e:
-                logger.warning(f"HfApi upload fallback skipped: {e}")
+                logger.warning(f"HfApi map upload skipped: {e}")
 
         # Invalidate Redis cache so new trending and recommendations show up immediately
         UPSTASH_REDIS_URL = os.getenv("UPSTASH_REDIS_URL")
