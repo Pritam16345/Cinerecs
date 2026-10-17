@@ -57,6 +57,20 @@ CREATE INDEX IF NOT EXISTS idx_movies_title ON movies USING btree (lower(title))
 CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings (user_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_movie ON ratings (movie_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist (user_id);
+
+ALTER TABLE movies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
+
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE tablename = 'movies' AND policyname = 'Allow public read-only access'
+    ) THEN
+        CREATE POLICY "Allow public read-only access" ON movies FOR SELECT USING (true);
+    END IF;
+END $$;
 """
 
 
