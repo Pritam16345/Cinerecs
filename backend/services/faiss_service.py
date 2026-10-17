@@ -63,16 +63,17 @@ class FAISSService:
 
         if index_path.exists() and map_path.exists() and not force_refresh:
             try:
-                self.index = faiss.read_index(str(index_path))
-                ntotal = self.index.ntotal if self.index is not None else 0
-                logger.info(f"FAISS loaded locally: {ntotal} vectors")
-                with open(map_path, "r") as f:
-                    self.movie_id_map = json.load(f)
-                emb_path = data_dir / EMBEDDINGS_FILE
-                if emb_path.exists():
-                    self.embeddings = np.load(str(emb_path))
-                self._loaded = True
-                return True
+                if index_path.stat().st_size > 1000 and map_path.stat().st_size > 100:
+                    self.index = faiss.read_index(str(index_path))
+                    ntotal = self.index.ntotal if self.index is not None else 0
+                    logger.info(f"FAISS loaded locally: {ntotal} vectors")
+                    with open(map_path, "r") as f:
+                        self.movie_id_map = json.load(f)
+                    emb_path = data_dir / EMBEDDINGS_FILE
+                    if emb_path.exists() and emb_path.stat().st_size > 1000:
+                        self.embeddings = np.load(str(emb_path))
+                    self._loaded = True
+                    return True
             except Exception as e:
                 logger.warning(f"Local load failed, trying R2: {e}")
 
@@ -90,7 +91,7 @@ class FAISSService:
             emb_path = data_dir / EMBEDDINGS_FILE
 
             # 1. Load FAISS index
-            if not index_path.exists() or force_refresh:
+            if not index_path.exists() or force_refresh or index_path.stat().st_size < 1000:
                 logger.info(f"Downloading {INDEX_FILE}...")
                 s3.download_file(R2_BUCKET_NAME, INDEX_FILE, str(index_path))
             
@@ -99,7 +100,7 @@ class FAISSService:
             logger.info(f"FAISS loaded: {ntotal} vectors")
 
             # 2. Load Movie ID map
-            if not map_path.exists() or force_refresh:
+            if not map_path.exists() or force_refresh or map_path.stat().st_size < 100:
                 logger.info(f"Downloading {MAP_FILE}...")
                 s3.download_file(R2_BUCKET_NAME, MAP_FILE, str(map_path))
             
@@ -107,7 +108,7 @@ class FAISSService:
                 self.movie_id_map = json.load(f)
 
             # 3. Load Embeddings
-            if not emb_path.exists() or force_refresh:
+            if not emb_path.exists() or force_refresh or emb_path.stat().st_size < 1000:
                 try:
                     s3.download_file(R2_BUCKET_NAME, EMBEDDINGS_FILE, str(emb_path))
                     self.embeddings = np.load(str(emb_path))
