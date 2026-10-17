@@ -107,47 +107,81 @@ async def main():
     if pool is None:
         sys.exit("Failed to create database connection pool")
 
-    # 1. Get changes from last 7 days (weekly sync)
+    # 1. Discover new and trending movies from TMDB
     today = date.today().isoformat()
     week_ago = (date.today() - timedelta(days=7)).isoformat()
+    two_months_ago = (date.today() - timedelta(days=60)).isoformat()
 
     async with httpx.AsyncClient() as client:
-        logger.info(f"Syncing changes from {week_ago} to {today}")
-        changed_ids, page = set(), 1
-        while True:
-            data = await tmdb_get(client, "/movie/changes", {
-                "start_date": week_ago,
-                "end_date": today,
-                "page": str(page)
-            })
-            if not data or not data.get("results"): break
-            for item in data["results"]:
-                if item.get("id"): changed_ids.add(item["id"])
-            if page >= data.get("total_pages", 1): break
-            page += 1
+        logger.info(f"Syncing changes and discovering new movies for week of {today}")
+        candidate_ids = set()
 
-        # Only sync updates for movies we already track with popularity > 4.0, plus new trending movies
+        # A. Weekly & Daily Trending
+        for p in range(1, 4):
+            data = await tmdb_get(client, "/trending/movie/week", {"page": str(p)})
+            if data and data.get("results"):
+                for m in data["results"]:
+                    if m.get("id"): candidate_ids.add(m["id"])
+
+        data = await tmdb_get(client, "/trending/movie/day", {"page": "1"})
+        if data and data.get("results"):
+            for m in data["results"]:
+                if m.get("id"): candidate_ids.add(m["id"])
+
+        # B. Now Playing in theaters
+        for p in range(1, 4):
+            data = await tmdb_get(client, "/movie/now_playing", {"page": str(p)})
+            if data and data.get("results"):
+                for m in data["results"]:
+                    if m.get("id"): candidate_ids.add(m["id"])
+
+        # C. Popular movies
+        for p in range(1, 4):
+            data = await tmdb_get(client, "/movie/popular", {"page": str(p)})
+            if data and data.get("results"):
+                for m in data["results"]:
+                    if m.get("id"): candidate_ids.add(m["id"])
+
+        # D. Recent releases from last 60 days
+        for p in range(1, 4):
+            data = await tmdb_get(client, "/discover/movie", {
+                "primary_release_date.gte": two_months_ago,
+                "primary_release_date.lte": today,
+                "sort_by": "popularity.desc",
+                "page": str(p)
+            })
+            if data and data.get("results"):
+                for m in data["results"]:
+                    if m.get("id"): candidate_ids.add(m["id"])
+
+        logger.info(f"Discovered {len(candidate_ids)} candidate movies from trending/now_playing/popular/recent")
+
+        # E. Also check changes for existing tracked movies (cap to 15 pages max to avoid hanging)
         existing_rows = await pool.fetch("SELECT tmdb_id FROM movies WHERE popularity > 4.0")
         existing_ids = {r["tmdb_id"] for r in existing_rows}
 
-        trending_ids = set()
-        try:
-            trending_data = await tmdb_get(client, "/trending/movie/week", {"page": "1"})
-            if trending_data and trending_data.get("results"):
-                for m in trending_data["results"]:
-                    if m.get("id"): trending_ids.add(m["id"])
-        except Exception as e:
-            logger.warning(f"Failed to fetch trending: {e}")
+        changed_existing_ids = set()
+        for p in range(1, 16):
+            data = await tmdb_get(client, "/movie/changes", {
+                "start_date": week_ago,
+                "end_date": today,
+                "page": str(p)
+            })
+            if not data or not data.get("results"): break
+            for item in data["results"]:
+                if item.get("id") and item["id"] in existing_ids:
+                    changed_existing_ids.add(item["id"])
+            if p >= data.get("total_pages", 1): break
 
-        # Keep changes only for existing movies, plus any weekly trending movies
-        changed_ids = (changed_ids & existing_ids) | trending_ids
-
-        logger.info(f"Updating {len(changed_ids)} movies")
+        # Movies to sync = (all discovered new/popular/trending movies) | (tracked movies that changed)
+        movies_to_sync = candidate_ids | changed_existing_ids
+        new_ids = movies_to_sync - existing_ids
+        logger.info(f"Targeting {len(movies_to_sync)} movies ({len(new_ids)} brand new additions, {len(movies_to_sync - new_ids)} updates)")
 
         # 2. Update DB
         count, errors = 0, 0
         updated_tmdb_ids = set()
-        for tid in changed_ids:
+        for tid in movies_to_sync:
             data = await tmdb_get(client, f"/movie/{tid}", {"append_to_response": "credits,keywords"})
             if data and data.get("id"):
                 m = parse_movie(data)
@@ -196,27 +230,40 @@ async def main():
             except Exception as e:
                 logger.warning(f"Failed to load local index files: {e}")
                 
-        # If not local, try downloading from Hugging Face Space
+        # If not local, try Cloudflare R2 first
+        if existing_emb is None or existing_map is None:
+            R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
+            R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+            R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL")
+            R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "cinerecs")
+            if all([R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL]):
+                try:
+                    import boto3
+                    logger.info("Downloading existing index files from Cloudflare R2...")
+                    s3 = boto3.client("s3", endpoint_url=R2_ENDPOINT_URL, aws_access_key_id=R2_ACCESS_KEY_ID, aws_secret_access_key=R2_SECRET_ACCESS_KEY, region_name="auto")
+                    LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    s3.download_file(R2_BUCKET_NAME, "embeddings.npy", str(local_emb_path))
+                    s3.download_file(R2_BUCKET_NAME, "movie_id_map.json", str(local_map_path))
+                    existing_emb = np.load(str(local_emb_path))
+                    with open(local_map_path, "r") as f:
+                        existing_map = json.load(f)
+                    logger.info(f"Successfully loaded R2 index files (embeddings shape: {existing_emb.shape})")
+                except Exception as e:
+                    logger.warning(f"Failed to download index files from R2: {e}")
+
+        # If still not loaded, download from Hugging Face Space using huggingface_hub (properly resolves Git LFS)
         if existing_emb is None or existing_map is None:
             try:
-                logger.info("Downloading existing index files from Hugging Face Space...")
-                import urllib.request, io
-                
-                # Download movie_id_map
-                map_url = "https://huggingface.co/spaces/Pritu16345/cinerecs-api/resolve/main/data/movie_id_map.json"
-                req_map = urllib.request.Request(map_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_map, timeout=15) as resp:
-                    existing_map = json.loads(resp.read().decode())
-                
-                # Download embeddings
-                emb_url = "https://huggingface.co/spaces/Pritu16345/cinerecs-api/resolve/main/data/embeddings.npy"
-                req_emb = urllib.request.Request(emb_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_emb, timeout=45) as resp:
-                    existing_emb = np.load(io.BytesIO(resp.read()))
-                
+                from huggingface_hub import hf_hub_download
+                logger.info("Downloading existing index files from Hugging Face Space using hf_hub_download...")
+                map_file = hf_hub_download(repo_id="Pritu16345/cinerecs-api", filename="data/movie_id_map.json", repo_type="space")
+                emb_file = hf_hub_download(repo_id="Pritu16345/cinerecs-api", filename="data/embeddings.npy", repo_type="space")
+                with open(map_file, "r") as f:
+                    existing_map = json.load(f)
+                existing_emb = np.load(emb_file)
                 logger.info(f"Successfully loaded HF index files (embeddings shape: {existing_emb.shape})")
             except Exception as e:
-                logger.warning(f"Could not load/download existing index files: {e}. Will rebuild all embeddings from scratch.")
+                logger.warning(f"Could not load index files via hf_hub_download: {e}. Will rebuild embeddings for target movies.")
                 existing_emb = None
                 existing_map = None
 

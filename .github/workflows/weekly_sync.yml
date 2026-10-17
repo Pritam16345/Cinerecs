@@ -23,6 +23,19 @@ jobs:
           pip install -r backend/requirements.txt
           pip install huggingface_hub
 
+      - name: Clone Hugging Face Space index files
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "sync@cinerecs.com"
+          git config --global user.name "CineRecs Sync"
+          git lfs install
+          git clone https://Pritu16345:$HF_TOKEN@huggingface.co/spaces/Pritu16345/cinerecs-api hf_space
+          mkdir -p backend/data
+          if [ -d "hf_space/data" ]; then
+            cp -r hf_space/data/* backend/data/ 2>/dev/null || true
+          fi
+
       - name: Run weekly sync
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -36,17 +49,10 @@ jobs:
         run: python scripts/weekly_sync.py
 
       - name: Push updated index to Hugging Face Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config --global user.email "sync@cinerecs.com"
-          git config --global user.name "CineRecs Sync"
-          git lfs install
-          git clone https://Pritu16345:$HF_TOKEN@huggingface.co/spaces/Pritu16345/cinerecs-api hf_space
           cp backend/data/faiss_index.bin hf_space/data/faiss_index.bin
           cp backend/data/embeddings.npy hf_space/data/embeddings.npy
           cp backend/data/movie_id_map.json hf_space/data/movie_id_map.json
           cd hf_space
           git add data/
-          git commit -m "weekly index update"
-          git push
+          git diff --staged --quiet || (git commit -m "weekly index update" && git push)
